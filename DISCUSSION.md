@@ -1,192 +1,124 @@
-# Diskusi Teknis — Fullstack Engineer Assessment (Task Management)
+# Diskusi Teknis — Backend (Fullstack Engineer Assessment: Task Management)
 
-> Dokumen diskusi, bukan implementasi. Berisi analisa task, struktur folder yang diusulkan,
-> keputusan teknis yang perlu disepakati, dan best practice yang akan dipakai.
-
----
-
-## 1. Analisa Assessment & Prioritas
-
-### Mapping bobot evaluasi → fokus kerja
-
-| Kriteria | Bobot | Artinya secara praktis |
-|---|---|---|
-| Go | 35% | Arsitektur berlapis yang rapi, idiomatic Go, `context`, error handling, validasi input |
-| Frontend | 20% | Componentization, hooks, UX states (loading/error/empty) |
-| Redis | 15% | Desain cache key, TTL, invalidation, graceful degradation |
-| SQL | 10% | Skema + index + migration + dynamic query yang aman (anti SQL injection) |
-| Testing | 10% | Unit test backend (update/search/cache) + minimal 1 component test frontend |
-| Code Quality | 5% | Linter, formatter, konvensi penamaan konsisten |
-| Documentation | 5% | README lengkap: setup, env, API contract, cara run test |
-
-**Kesimpulan strategi:** backend dan Redis adalah 50% nilai → kerjakan paling awal dan paling rapi.
-Frontend solid tapi tidak perlu over-engineer. Testing jangan dikerjakan di akhir — kerjakan
-bersamaan per fitur supaya tidak tergesa.
-
-### Catatan kondisi repo saat ini
-
-- Repo praktis **kosong** — hanya `go.mod` + `go.sum` (Gin, `go-sql-driver/mysql`, `go-redis` sudah ada). Jadi ini greenfield; "existing functionality" yang dimaksud soal adalah aplikasi yang kita bangun sendiri di awal (CRUD dasar), lalu fitur assessment ditambahkan di atasnya tanpa merusaknya.
-- `.git` saat ini berada **di dalam folder `backend/`**. Deliverable mencakup frontend → sebaiknya dijadikan **monorepo** dengan git root di `task-management-assessment/` (perlu re-init / pindah `.git` satu level ke atas). Perlu konfirmasi.
-- Di `go.mod` ada dependensi `// indirect` yang aneh (`mongo-driver`, `quic-go`) — nanti dibersihkan dengan `go mod tidy` saat mulai coding.
+> Fase **Backend**. Frontend ditunda ke appendix. Prinsip rencana ini: **sesuai task, tidak lebih** —
+> setiap fase dipetakan ke bullet task, dan ada daftar eksplisit hal yang sengaja TIDAK dikerjakan.
 
 ---
 
-## 2. Keputusan Teknis yang Perlu Didiskusikan (Open Questions)
+## 1. Scoping: In vs Out (anti over-engineering)
 
-Ini pertanyaan yang menurut saya layak dikonfirmasi sebelum mulai coding (atau minimal
-kita sepakati asumsinya dan tulis di README):
+### IN — yang dikerjakan (semuanya langsung dari teks soal)
 
-1. **Semantik `PUT`** — full update (semua field required) atau partial update (semacam PATCH)?
-   Usulan: `PUT` = full update dengan validasi field wajib (`title`, `status`), sesuai semantik HTTP;
-   field opsional (`description`, `assignee`, `due_date`) boleh di-null-kan. Ini paling mudah
-   dipertanggungjawabkan di majelis review.
-2. **Unique title vs soft delete** — kalau `title` di-UNIQUE plain, judul yang sudah soft-deleted
-   akan "mengunci" judul itu selamanya. Opsi dibahas di §5 (generated column). Rekomendasi saya: aktif
-   yang unik, yang terhapus bebas.
-3. **Parameter `sort`** — field apa saja yang boleh? Usulan whitelist: `title`, `status`, `assignee`,
-   `created_at`, `updated_at` + arah `asc|desc` (param terpisah `order`). ORDER BY tidak bisa
-   di-parameterize → wajib whitelist agar bebas SQL injection.
-4. **Filter `assignee`** — exact match atau partial (LIKE)? Usulan: exact match (karena di UI nanti
-   berupa pilihan), `keyword` yang pakai LIKE untuk `title`.
-5. **Strategi invalidasi cache** — hapus semua key dengan prefix `tasks:list:*` via `SCAN`
-   (sederhana, selalu benar) vs hapus presisi per kombinasi query (rumit, rawan bocor).
-   Usulan: flush per prefix. Cukup untuk skala ini, dan gampang di-test.
-6. **State management frontend** — plain hooks (`useState`/`useEffect` + axios) vs React Query?
-   Usulan: plain hooks (tanpa dependency tambahan, sesuai durasi 1–2 hari); di README disebutkan
-   bahwa di production kita akan pakai TanStack Query untuk caching/retry/refetch otomatis.
-7. **Monorepo vs repo terpisah** — usulan monorepo (`backend/` + `frontend/`), perlu pindahkan git root.
-8. **Out of scope (ditulis sebagai asumsi di README):** tidak ada auth, tidak ada tabel `users`
-   (`assignee` cukup string), tidak ada websockets/realtime.
+| Item | Sumber di soal |
+|---|---|
+| `GET /api/tasks` + filter `status, keyword, assignee, page, limit, sort` | Task 1 |
+| `PUT /api/tasks/{id}` | Task 1 |
+| Soft `DELETE /api/tasks/{id}` | Task 1 |
+| Error response konsisten (envelope terpusat) | Task 1 |
+| `POST /api/tasks` (create) — **bukan task, tapi prasyarat** | Task 2 menyebut *"invalidate after **create**"*; Task 4 *"duplicate title → 409"* — keduanya hanya ada kalau create ada. Dianggap bagian "existing app" (soal: *joining an existing team*), tapi repo kosong → kita bootstrap sendiri, seminimal mungkin: create + list polos |
+| Redis: cache GET list 60s, key memuat query param, invalidate setelah create/update/delete | Task 2 |
+| Duplicate title → 409 (bukan 500) | Task 4 |
+| Hide soft-deleted di semua query | Task 4 |
+| Refresh list setelah update (di BE = invalidasi cache; refetch di FE saat fase frontend) | Task 4 |
+| Test backend: update, search, cache invalidation | Task 5 |
+| README, migration (up+down), git repo rapi | Deliverables |
+
+### OUT — yang sengaja TIDAK dikerjakan (dan alasannya)
+
+| Tidak dikerjakan | Alasan |
+|---|---|
+| `GET /api/tasks/:id` | Tidak diminta bullet task manapun; modal edit frontend bisa mengisi form dari data list item. Kalau nanti FE ternyata perlu, tambahannya ~10 baris |
+| Full CRUD lengkap / tabel users / auth | Tidak diminta; `assignee` cukup string |
+| Dockerfile untuk app Go | Deliverable tidak minta; `docker-compose` cukup untuk MySQL + Redis saja, app jalan via `go run` |
+| Custom middleware logger/recovery/CORS | Pakai `gin.Logger()` + `gin.Recovery()` bawaan. CORS pun tidak perlu — React Native tidak punya browser CORS |
+| ORM (GORM/sqlx) | `database/sql` + driver (sudah ada di go.mod) cukup dan menunjukkan skill SQL lebih |
+| Anti-stampede (singleflight), pub/sub invalidation | Over-engineer untuk soal ini; cukup 1 kalimat di README "future improvements" |
+| golangci-lint setup penuh | Cukup `gofmt` + `go vet` (Code Quality hanya 5%). golangci opsional kalau ada waktu |
+| Generated column untuk unique title | Default: `UNIQUE(title)` plain + catch `1062` → 409 (persis yang diminta). Varian "unik hanya untuk row aktif" dicatat 1 baris di README sebagai catatan desain, bukan implementasi |
 
 ---
 
-## 3. Struktur Folder yang Diusulkan (Monorepo)
+## 2. Keputusan Final (asumsi kerja — bisa diveto, tapi tidak menghalangi mulai)
+
+1. **`PUT` = full update**: wajib `title` + `status`; opsional `description`, `assignee`, `due_date` (boleh null).
+2. **`sort` satu param**: `sort=created_at:desc` (arah optional, default `created_at:desc`).
+   Field di-whitelist: `title | status | assignee | created_at | updated_at` — `ORDER BY` tidak bisa
+   di-parameterize, whitelist = satu-satunya cara aman.
+3. **Duplicate title** = constraint `UNIQUE(title)` di DB + repository menangkap `1062` → `ErrDuplicateTitle`
+   → middleware → 409. (Cek `SELECT` dulu itu race-prone.)
+4. **`assignee` filter = exact match**; `keyword` = `LIKE` pada `title`.
+5. **Invalidasi cache = hapus semua key prefix `tasks:list:*`** via `SCAN` (bukan `KEYS`). Sederhana, selalu benar.
+6. **Redis down = degrade, bukan 500**: error cache di-log warning, request lanjut ke DB.
+7. **Validasi list**: `page ≥ 1` (default 1), `1 ≤ limit ≤ 100` (default 10), `status ∈ {todo, in_progress, done}`.
+
+---
+
+## 3. Struktur Folder BE (dipangkas seminimal mungkin)
 
 ```
-task-management-assessment/
-├── README.md                        # dokumentasi utama (setup, API, test)
-├── docker-compose.yml               # MySQL 8 + Redis 7 (+ optional adminer)
-├── DISCUSSION.md                    # dokumen ini (opsional dihapus saat submit)
-├── Makefile                         # shortcut: run, test, migrate, lint, docker
-│
-├── backend/                         # Go (Gin) + MySQL + Redis
-│   ├── cmd/
-│   │   └── api/
-│   │       └── main.go              # entrypoint: load config → koneksi DB/Redis → wiring → graceful shutdown
-│   ├── internal/                    # tidak bisa diimport dari luar module (Go convention)
-│   │   ├── config/
-│   │   │   └── config.go            # baca env (12-factor), default value, validasi config
-│   │   ├── database/
-│   │   │   ├── mysql.go             # *sql.DB + pool setting (MaxOpenConns, ConnMaxLifetime)
-│   │   │   └── redis.go             # redis.UniversalClient init + health check
-│   │   ├── middleware/
-│   │   │   ├── logger.go            # request logging (method, path, status, latency)
-│   │   │   ├── recovery.go          # panic → 500 terformat (jangan pakai bawaan gin yang mentah)
-│   │   │   ├── cors.go
-│   │   │   └── error.go             # PUSAT pemetaan error domain → HTTP response terformat
-│   │   └── task/                    # satu module domain = semua layer untuk "task"
-│   │       ├── handler.go           # HTTP layer: bind & validate request, panggil service, tulis response
-│   │       ├── handler_test.go
-│   │       ├── service.go           # business logic + orkestrasi cache
-│   │       ├── service_test.go      # termasuk test cache invalidation (miniredis)
-│   │       ├── repository.go        # SQL murni: filtering, pagination, soft delete
-│   │       ├── repository_test.go   # search & soft-delete (sqlmock / MySQL docker)
-│   │       ├── model.go             # entity Task (plain struct, tag db)
-│   │   │   ├── dto.go               # request/response structs (tag binding+json terpisah)
-│   │   │   ├── cache.go             # cache key builder, Get/Set/Invalidate (interface → mockable)
-│   │   │   └── errors.go            # error domain: ErrNotFound, ErrDuplicateTitle, ErrValidation
-│   │   └── apperr/                  # (opsional) error envelope umum lintas domain
-│   ├── migrations/
-│   │   ├── 000001_create_tasks.up.sql
-│   │   ├── 000001_create_tasks.down.sql
-│   │   └── 000002_add_indexes.up.sql (jika perlu)
-│   ├── .env.example
-│   ├── Dockerfile                   # multi-stage build (builder → distroless/alpine)
-│   └── .golangci.yml
-│
-└── frontend/                        # React Native + TypeScript
-    ├── src/
-    │   ├── api/
-    │   │   ├── client.ts            # axios instance: baseURL, timeout, interceptor error
-    │   │   └── tasks.ts             # fungsi listTasks/getTask/updateTask/deleteTask (typed)
-    │   ├── components/
-    │   │   ├── SearchInput.tsx      # input + debounce internal
-    │   │   ├── StatusFilter.tsx     # chips/dropdown: all | todo | in_progress | done
-    │   │   ├── TaskItem.tsx         # 1 baris task + tombol edit/delete
-    │   │   ├── TaskList.tsx         # FlatList + empty state
-    │   │   ├── Pagination.tsx       # prev/next + info halaman
-    │   │   ├── EditTaskModal.tsx    # form + validasi + loading saat submit
-    │   │   └── common/              # Button, LoadingOverlay, ErrorBanner, SkeletonList
-    │   ├── screens/
-    │   │   └── TaskListScreen.tsx   # komposisi semua komponen di atas
-    │   ├── hooks/
-    │   │   └── useTasks.ts          # state: list, meta, loading, error; refetch; AbortController
-    │   ├── types/
-    │   │   └── task.ts              # type Task, TaskListMeta, enum status
-    │   ├── theme/                   # warna, spacing, typography (konsistensi UI)
-    │   └── __tests__/
-    │       └── SearchInput.test.tsx # minimal 1: search / task list (Jest + RNTL)
-    ├── App.tsx
-    └── jest.config.js
+backend/                        # git root saat ini
+├── cmd/
+│   └── api/
+│       └── main.go            # config → koneksi (ping) → wiring router → run + graceful shutdown
+├── internal/
+│   ├── config/
+│   │   └── config.go          # os.Getenv + default (stdlib, tanpa library config)
+│   ├── database/
+│   │   ├── mysql.go           # *sql.DB + pool + ping saat startup
+│   │   └── redis.go           # redis client + ping
+│   ├── middleware/
+│   │   └── error.go           # SATU-SATUNYA middleware custom: error domain → envelope HTTP
+│   └── task/
+│       ├── model.go           # entity Task
+│       ├── dto.go             # request/response (tag binding + json)
+│       ├── errors.go          # ErrNotFound, ErrDuplicateTitle, ErrValidation
+│       ├── repository.go      # SQL: filter dinamis, pagination, soft delete, catch 1062
+│       ├── service.go         # business logic + orkestrasi cache
+│       ├── cache.go           # interface TaskCache + impl Redis (key builder, Get/Set/Invalidate)
+│       ├── handler.go         # bind/validate → service → envelope
+│       └── *_test.go          # service_test, repository_test (fase 5)
+├── migrations/
+│   ├── 000001_create_tasks.up.sql
+│   └── 000001_create_tasks.down.sql
+├── docker-compose.yml         # MySQL 8 + Redis 7 (dengan healthcheck)
+├── Makefile                   # run / migrate-up / migrate-down / test
+├── .env.example
+└── .gitignore                 # .env tidak masuk git
 ```
 
-**Alasan struktur ini:**
-- `internal/` → idiom Go untuk kode private module.
-- Layer per-domain (`task/handler|service|repository`) bukan per-layer global — dependency mengalir satu arah: `handler → service → repository`, tidak pernah kebalikan. `service` menerima interface `TaskRepository` dan `TaskCache` → mudah di-mock saat test (kunci untuk nilai Testing 10%).
-- `dto.go` dipisah dari `model.go` → kontrak API tidak dempet dengan skema DB (tag `binding` + `json` berbeda kebutuhan).
-- Migrasi sebagai file SQL versioned (golang-migrate) → deliverable "DB migration" terpenuhi dan bisa di-review.
-- Frontend: logika data terpusat di `useTasks`, komponen presentational → gampang dites.
+Dependency arah satu: `handler → service → repository`. `service` menerima interface
+`TaskRepository` + `TaskCache` → mockable → inilah yang membuat test Task 5 mudah.
+
+Alur: `client → gin → handler(bind/validate) → service(logika + cache) → repository(SQL) → MySQL / Redis`
+Error dikembalikan sebagai `error` biasa ke atas; `middleware/error.go` yang memformat — handler tidak
+pernah menulis envelope error manual.
 
 ---
 
-## 4. Kontrak API & Error Response
-
-### Endpoint
+## 4. Kontrak API (4 endpoint — itu saja)
 
 | Method | Path | Keterangan |
 |---|---|---|
-| GET | `/api/tasks` | list + filter `status`, `keyword`, `assignee`, `page`, `limit`, `sort`, `order` |
-| GET | `/api/tasks/:id` | detail (404 jika tidak ada / sudah soft-deleted) |
-| POST | `/api/tasks` | create (409 jika title duplikat) |
-| PUT | `/api/tasks/:id` | update full (404 / 400 / 409) |
-| DELETE | `/api/tasks/:id` | soft delete → 204 (404 jika tidak ada) |
+| GET | `/api/tasks` | list + filter `status, keyword, assignee, page, limit, sort` |
+| POST | `/api/tasks` | create (base "existing") — 409 jika title duplikat |
+| PUT | `/api/tasks/:id` | full update — 400/404/409 |
+| DELETE | `/api/tasks/:id` | soft delete → 204; 404 jika tidak ada/sudah terhapus |
 
-### Envelope sukses (konsisten)
-
+Envelope sukses:
 ```json
-// GET /api/tasks?status=todo&page=1&limit=10
-{
-  "data": [ { "id": 1, "title": "...", "status": "todo", "assignee": "...", "...": "..." } ],
-  "meta": { "page": 1, "limit": 10, "total_items": 42, "total_pages": 5 }
-}
+{ "data": [ ... ], "meta": { "page": 1, "limit": 10, "total_items": 42, "total_pages": 5 } }
+```
+Envelope error (semua endpoint, dipusatkan di `middleware/error.go`):
+```json
+{ "error": { "code": "DUPLICATE_TITLE", "message": "task title already exists" } }
 ```
 
-### Envelope error (konsisten, dipusatkan di middleware `error.go`)
-
-```json
-{
-  "error": {
-    "code": "DUPLICATE_TITLE",            // kode stabil, mesin-membaca
-    "message": "task title already exists" // pesan manusia
-  }
-}
-```
-
-Pemetaan error domain → HTTP (tipe error khusus, dicek dengan `errors.As`):
-
-| Error domain | HTTP | Kode |
-|---|---|---|
-| `ErrValidation` | 400 | `VALIDATION_ERROR` (+ detail per field) |
-| `ErrNotFound` | 404 | `NOT_FOUND` |
-| `ErrDuplicateTitle` | 409 | `DUPLICATE_TITLE` |
-| error tak terduga | 500 | `INTERNAL_ERROR` (stack hanya ke log, tidak bocor ke client) |
-
-Handler **tidak pernah** memanggil `c.JSON(...)` untuk error secara manual — cukup `return err`,
-middleware yang memformat. Ini yang membuat "consistent error responses" terjamin dan mudah dites.
+Pemetaan error: `ErrValidation`→400 `VALIDATION_ERROR` · `ErrNotFound`→404 `NOT_FOUND` ·
+`ErrDuplicateTitle`→409 `DUPLICATE_TITLE` · lainnya→500 `INTERNAL_ERROR` (detail hanya ke log).
 
 ---
 
-## 5. Skema DB & Migration (usulan)
+## 5. Migration (satu file up + satu down)
 
 ```sql
 -- 000001_create_tasks.up.sql
@@ -200,129 +132,171 @@ CREATE TABLE tasks (
     created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     deleted_at  TIMESTAMP NULL DEFAULT NULL,
-
-    -- unik hanya untuk task AKTIF: baris soft-deleted menjadi NULL → dikecualikan
-    -- dari constraint (MySQL mengizinkan banyak NULL di unique index)
-    active_title VARCHAR(255) GENERATED ALWAYS AS (
-        CASE WHEN deleted_at IS NULL THEN title END
-    ) STORED,
-    UNIQUE KEY uq_tasks_active_title (active_title),
-
-    KEY idx_tasks_status_deleted (status, deleted_at),
+    UNIQUE KEY uq_tasks_title (title),
+    KEY idx_tasks_status_deleted   (status, deleted_at),
     KEY idx_tasks_assignee_deleted (assignee, deleted_at),
     KEY idx_tasks_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+-- down: DROP TABLE tasks;
 ```
 
-Poin SQL yang dinilai (10%):
-- **Duplicate title → 409, bukan 500**: sumber kebenaran = constraint DB. Repository menangkap
-  `*mysql.MySQLError` dengan `Number == 1062` → translate ke `ErrDuplicateTitle` → 409.
-  (Cek duplikat manual dengan `SELECT` dulu itu race-prone; constraint + catch 1062 itu benar.)
-- **Index composite** mengikuti pola query filter + soft delete.
-- **ORDER BY di-whitelist** di service layer (map `sort` param → nama kolom aman) — ORDER BY tidak
-  bisa di-placeholder, jadi whitelist adalah satu-satunya cara aman.
-- Semua query (list, get, update, delete) **wajib** menambahkan `deleted_at IS NULL` —
-  ini bug fix "hide soft-deleted tasks" sekaligus jaga-jaga agar update/delete terhadap task
-  yang sudah terhapus mengembalikan 404, bukan meresurrect data.
-- Keyword search: `WHERE title LIKE CONCAT('%', ?, '%')` — parameterized, bukan string concat.
+Catatan desain (ditulis di README, bukan diimplementasi): dengan soft delete, `UNIQUE(title)` berarti
+judul yang sudah dihapus tetap "terpakai" — kalau mau judul bebas setelah delete, opsinya generated
+column `active_title`. Untuk soal ini plain UNIQUE sudah memenuhi ("duplicate → 409").
+
+Poin SQL yang dinilai: index composite mengikuti pola query (filter + `deleted_at IS NULL` + sort),
+`LIKE CONCAT('%', ?, '%')` parameterized, whitelist sort, `COUNT(*)` terpisah untuk meta,
+`deleted_at IS NULL` di SEMUA query.
 
 ---
 
-## 6. Best Practice per Task
+## 6. RENCANA EKSEKUSI — 7 fase, tiap fase dipetakan ke bullet task
 
-### Task 1 — Backend (40%)
-- Layered architecture: `handler` (HTTP) → `service` (business logic) → `repository` (SQL). Satu arah, via interface.
-- Validasi di boundary: `binding` tags Gin untuk bentuk request + validasi semantik (enum status, range page/limit: `page ≥ 1`, `1 ≤ limit ≤ 100`, default `page=1`, `limit=10`).
-- Dynamic WHERE dibangun dengan slice `[]any` + placeholder `?` — tidak pernah string concat nilai user.
-- `context.Context` mengalir sampai ke query (`QueryContext`) + `context.WithTimeout` per request.
-- Kembalikan `meta` pagination dari `COUNT(*)` terpisah — total tidak boleh mengikuti LIMIT.
-- Graceful shutdown di `main.go` (signal → `server.Shutdown` + tutup DB/Redis).
+| Fase | Isi | Mengerjakan bagian | Estimasi |
+|---|---|---|---|
+| 0 | Infra & skeleton | prasyarat | 1 j |
+| 1 | Migration + base "existing" (POST + GET polos) + error envelope + fix 409 | Task 4 (409), prasyarat Task 2 | 1,5 j |
+| 2 | Filtering + pagination + sort | Task 1 bullet 1 | 1,5 j |
+| 3 | PUT + soft DELETE + hide soft-deleted | Task 1 bullet 2–3, Task 4 (hide) | 1,5 j |
+| 4 | Redis cache + invalidation | Task 2, Task 4 (refresh via invalidasi) | 1,5 j |
+| 5 | Test: update, search, cache invalidation | Task 5 | 1,5 j |
+| 6 | README + lint + commit | Deliverables | 1 j |
 
-### Task 2 — Redis (15%)
-- Cache di service layer (bukan middleware) supaya testable dan invalidation eksplisit.
-- **Cache key memuat seluruh query param secara kanonik** (diurutkan, dinormalisasi):
-  ```
-  tasks:list:assignee=budi&keyword=fix&limit=10&page=1&order=desc&sort=created_at&status=todo
-  ```
-  Builder key: parse query → struct → serialize field-by-field terurut → duplikat key yang sama
-  dari query yang hanya beda urutan param tetap HIT.
-- TTL 60 detik (`SET key json EX 60`).
-- Value = envelope lengkap (`data` + `meta`) → hit juga menghemat query COUNT.
-- Invalidasi: setelah POST/PUT/DELETE sukses → `SCAN` prefix `tasks:list:*` + `DEL`
-  (`SCAN`, **bukan** `KEYS` — KEYS memblokir Redis di production).
-- **Graceful degradation**: kalau Redis down, jangan 500 — log warning dan lanjut ke DB.
-  Cache adalah optimasi, bukan dependency fungsional.
-- Catatan di README: untuk beban tinggi, stampede bisa dicegah dengan `singleflight` (disebut, tidak wajib diimplementasi).
+Total ±9,5 jam → pas untuk durasi 1–2 hari dengan buffer.
 
-### Task 3 — Frontend (25%)
-- Semua akses API lewat `src/api/` (typed, satu axios instance) — komponen tidak pernah fetch mentah.
-- `useTasks` hook tunggal: state `data | loading | error`, `refetch()`, `AbortController` untuk
-  membatalkan request basi saat user mengetik cepat (cegah race condition hasil lama menimpa baru).
-- Search di-debounce ±300–500ms; filter status & pagination memicu fetch langsung; ganti filter → reset `page` ke 1.
-- Loading: skeleton list saat fetch awal/ganti halaman; spinner + disable tombol saat submit edit;
-  error banner dengan tombol retry; empty state.
-- `EditTaskModal`: form terkontrol, validasi sisi client (title wajib, status enum), tampilkan pesan
-  409 dari server, tutup modal → `refetch()` (sekaligus bug fix "refresh list after update").
-- `FlatList` (bukan `.map` di View) untuk performa render.
+### Fase 0 — Infra & skeleton
+1. `go mod tidy` (buang dependensi liar: mongo-driver, quic-go).
+2. `docker-compose.yml`: MySQL 8 + Redis 7 + healthcheck.
+3. `config.go`: env → struct + default (stdlib saja).
+4. `mysql.go` / `redis.go`: koneksi + `Ping()` saat startup — gagal koneksi = fail fast.
+5. `main.go`: gin default middleware (`Logger`, `Recovery`), router kosong, graceful shutdown.
 
-### Task 4 — Bug Fixes (10%)
-- 409 duplicate: catch `1062` dari constraint `uq_tasks_active_title` (lihat §5).
-- Refresh list after update: `refetch()` setelah PUT sukses di frontend + invalidasi cache di backend (keduanya — hanya salah satu masih bisa menampilkan data basi dari cache).
-- Hide soft-deleted: `deleted_at IS NULL` di SEMUA query + test khusus yang membuktikannya.
+**DoD:** `docker compose up -d` → `make run` → server jalan, log ping DB & Redis sukses.
 
-### Task 5 — Testing (10%)
-Backend (Go):
-- `handler_test.go` — `httptest` + gin test mode, mock service → test PUT sukses, 404, 409, 400.
-- `service_test.go` — mock repository + **miniredis** (`alicebob/miniredis`) → test cache invalidation:
-  GET → hit DB; SET key; PUT → key hilang dari miniredis; GET berikutnya → hit DB lagi.
-- `repository_test.go` — sqlmock (atau MySQL via docker-compose) → test search (WHERE dinamis benar),
-  soft delete tersembunyi, pagination meta.
+### Fase 1 — Migration + base "existing" + fix 409
+1. Tulis migration up/down; runner via golang-migrate **CLI** di Makefile (tanpa code tambahan).
+2. `model.go`, `dto.go`, `errors.go`.
+3. `middleware/error.go` — envelope terpusat sejak awal (dipakai semua endpoint setelahnya).
+4. `repository.go`: `Create` (catch `1062` → `ErrDuplicateTitle`) + `List` versi polos (tanpa filter).
+5. `handler.go`: `POST /api/tasks`, `GET /api/tasks`; wiring di main.
 
-Frontend:
-- Jest + React Native Testing Library. Minimal satu: `SearchInput` (mengetik → debounce → onChange
-  terpanggil sekali, fake timers) atau `TaskList` (render item, empty state, loading).
+**DoD:** curl `POST` sukses → 201; `POST` title sama → **409** (bukan 500); `GET` → 200 berisi data.
 
-Prinsip: test menyusuri **interface**, bukan implementasi → refactor aman.
+### Fase 2 — Filtering + pagination + sort (Task 1)
+1. `ListTasksQuery` dto: parse + validasi (default page/limit, enum status, whitelist sort).
+2. Repository `List`: WHERE dinamis dari slice kondisi + `[]any` (placeholder `?`, tidak pernah concat
+   string user), `deleted_at IS NULL` selalu ada, `ORDER BY` dari whitelist, `LIMIT ? OFFSET ?`,
+   `COUNT(*)` terpisah → meta.
+
+**DoD:** curl semua kombinasi filter mengembalikan data + meta benar; sort field di luar whitelist
+ditolak/di-fallback ke default (bukan error SQL); injection attempt aman.
+
+### Fase 3 — PUT + soft DELETE (Task 1) + hide soft-deleted (Task 4)
+1. `PUT /api/tasks/:id`: full update, validasi, tidak ada/sudah terhapus → `ErrNotFound` (404),
+   duplikat title → 409.
+2. `DELETE /api/tasks/:id`: `UPDATE ... SET deleted_at = NOW() WHERE id=? AND deleted_at IS NULL`
+   → rows affected 0 = 404; sukses = 204.
+3. Audit: `deleted_at IS NULL` ada di List, Update, Delete (dan semua query berikutnya).
+
+**DoD:** curl PUT → 200 data berubah; PUT id tak ada → 404; DELETE → 204; task terhapus hilang dari
+list; DELETE ulang task yang sama → 404.
+
+### Fase 4 — Redis cache (Task 2)
+1. `cache.go`: interface `TaskCache` + impl Redis.
+   - Key kanonik dari SEMUA query param (field terurut): `tasks:list:keyword=fix&limit=10&page=1&sort=created_at:desc&status=todo`
+     → dua request yang hanya beda urutan param → key sama → HIT.
+   - `SET key <envelope json> EX 60`.
+   - `InvalidateList`: `SCAN` match `tasks:list:*` + DEL batch.
+   - Semua error cache di-log warning & diabaikan → Redis down tetap layani dari DB.
+2. `service.go`: `List` = coba cache → miss → repo → set cache; `Create`/`Update`/`Delete` sukses →
+   `InvalidateList()`.
+
+**DoD:** curl GET dua kali → keduanya 200 (kedua dari cache — bukti: `redis-cli --scan --pattern 'tasks:list:*'`
++ log "cache hit"); setelah POST/PUT/DELETE → daftar key kosong lagi; matikan Redis → endpoint tetap 200.
+
+### Fase 5 — Test (Task 5: update, search, cache invalidation)
+Test persis yang diminta + sedikit pendukung — tidak mengejar coverage kosmetik:
+1. `service_test.go` (mock repo + **miniredis**):
+   - **Update**: update sukses mengubah field; id tak ada → `ErrNotFound`; title duplikat → `ErrDuplicateTitle`.
+   - **Cache invalidation**: GET → repo terpanggil & key tersimpan; GET kedua → repo TIDAK terpanggil;
+     Update → key hilang; GET ketiga → repo terpanggil lagi.
+2. `repository_test.go` (**sqlmock**): **search** — kombinasi status/keyword/assignee menghasilkan
+   WHERE benar; soft-deleted tidak masuk hasil; pagination LIMIT/OFFSET + COUNT benar.
+3. (Pendukung, murah) satu httptest: POST duplikat → HTTP 409 dengan envelope — bukti langsung bullet Task 4.
+
+**DoD:** `go test ./...` hijau, deterministik.
+
+### Fase 6 — README + polish (Deliverables)
+1. README: cara run (docker compose → migrate-up → run), env variables, tabel API + contoh curl,
+   cara run test, catatan desain (cache strategy, soft delete, 409 mapping, out-of-scope/future work
+   satu paragraf).
+2. `gofmt` + `go vet` bersih (golangci opsional).
+3. Commit rapi per fase (daftar di §8); `.env` tidak masuk git.
+
+**DoD:** reviewer clone → ikuti README → semua jalan tanpa bertanya.
 
 ---
 
-## 7. Tooling & Code Quality (5%)
+## 7. Pemetaan Bobot Nilai → di Fase Mana Dikerjakan
 
-- Backend: `gofmt`/`goimports`, `golangci-lint` (errcheck, govet, staticcheck), konvensi nama Go standar.
-- Frontend: TypeScript strict, ESLint + Prettier.
-- Konfigurasi via env (`.env.example` dicommit, `.env` di-gitignore) — 12-factor.
-- `docker-compose.yml` untuk MySQL + Redis supaya reviewer jalan dengan satu perintah.
-- `Makefile`: `make run`, `make test`, `make migrate-up`, `make lint`.
+| Kriteria | Bobot | Fase |
+|---|---|---|
+| Go 35% | Fase 0–3, 6 (struktur berlapis, idiom, context, error handling) |
+| Redis 15% | Fase 4 |
+| SQL 10% | Fase 1–3 (skema, index, dynamic query, migration) |
+| Testing 10% | Fase 5 |
+| Code Quality 5% | Fase 6 |
+| Documentation 5% | Fase 6 |
 
-## 8. Strategi Git & Commit (deliverable "git repository" ikut dinilai)
-
-Conventional commits, commit kecil per fitur — riwayat yang bisa dibaca reviewer:
+## 8. Commit Plan (conventional commits, per fase)
 
 ```
-chore(backend): scaffold project, config, docker-compose
-feat(db): add tasks migration with soft delete + active title unique constraint
-feat(api): task CRUD endpoints with consistent error envelope
-feat(api): list filtering, pagination, and sorting
-fix(api): map duplicate title to 409 instead of 500
-feat(cache): cache GET /api/tasks for 60s with query-param keys
-feat(cache): invalidate list cache on create/update/delete
-feat(frontend): task list screen with search, status filter, pagination
-feat(frontend): edit modal with loading state and list refresh
-test(backend): service, handler, repository, and cache invalidation tests
-test(frontend): SearchInput component test
-docs: README with setup, API contract, and test instructions
+chore(backend): scaffold config, db/redis connection, docker-compose
+feat(db): add tasks migration with soft delete and unique title
+feat(api): create + list endpoints with centralized error envelope
+fix(api): return 409 for duplicate title instead of 500
+feat(api): list filtering, pagination, and whitelisted sorting
+feat(api): PUT update and soft DELETE endpoints
+feat(cache): cache task list 60s with query-param keys + invalidation on mutations
+test(backend): update, search, and cache invalidation tests
+docs(backend): README with setup, API contract, and tests
 ```
 
-## 9. Rencana Eksekusi (1–2 hari)
+## 9. Checklist Requirement BE (review akhir, cocokkan per bullet)
 
-| Tahap | Isi |
-|---|---|
-| 0. Setup (±1 jam) | Monorepo, docker-compose, config, koneksi DB/Redis, migration, CRUD dasar jalan |
-| 1. Backend inti | Filtering/pagination/sort + PUT + soft delete + error envelope (Task 1 & 4) |
-| 2. Redis | Cache + invalidation (Task 2) |
-| 3. Test backend | Ditulis per fitur di tahap 1–2, bukan di akhir (Task 5) |
-| 4. Frontend | List + filter + pagination + modal + loading (Task 3) + 1 component test |
-| 5. Polish | README, .env.example, lint bersih, review ulang requirement checklist per item |
+- [ ] Filter: `status`, `keyword`, `assignee`, `page`, `limit`, `sort`
+- [ ] `PUT /api/tasks/{id}` — 200/400/404/409
+- [ ] Soft `DELETE /api/tasks/{id}` — 204, hilang dari list, DELETE ulang → 404
+- [ ] Error konsisten via middleware terpusat (semua endpoint)
+- [ ] Cache 60s, key memuat query param
+- [ ] Invalidate setelah create/update/delete
+- [ ] Duplicate title → 409
+- [ ] Refresh list after update — invalidasi cache di BE (+ refetch di fase FE)
+- [ ] Soft-deleted tidak pernah muncul
+- [ ] Test: update, search, cache invalidation
+- [ ] README + migration up/down + `.env.example`
 
-**Checklist akhir**: cocokkan satu-per-satu setiap bullet task 1–5 dengan implementasi —
-assessment dinilai per bullet, jadi pastikan tidak ada yang terlewat.
+---
+
+## Appendix — Frontend (fase berikutnya, JANGAN dikerjakan sebelum BE DoD semua)
+
+React Native + TS: `src/{api,components,screens,hooks,types}`, hook `useTasks` (loading/error/refetch,
+AbortController), SearchInput (debounce ±400ms), StatusFilter, Pagination (ganti filter → reset page 1),
+EditTaskModal, FlatList, skeleton/spinner, error banner.
+Test: Jest + React Native Testing Library, minimal 1 (SearchInput debounce atau TaskList render).
+Didiskusikan ulang saat BE selesai.
+
+### Alur data EditTaskModal (keputusan desain — tanpa GET /api/tasks/:id)
+
+```
+GET /api/tasks → list state (TaskResponse memuat SEMUA field editable)
+tap "Edit" di TaskItem → editingTask = task → modal render dengan initialValues={editingTask}
+submit → PUT /api/tasks/:id → sukses → tutup modal → refetch() list
+```
+
+- Modal tidak fetch apa pun: object task sudah lengkap di memory, karena kontrak `TaskResponse` di list
+  sengaja didesain memuat semua field yang bisa diedit. Ini keputusan kontrak API, bukan gaya kode.
+- Trade-off (dicatat di README): risiko data basi hanya relevan untuk multi-user concurrency —
+  di luar scope (tanpa auth/realtime). Setelah PUT selalu refetch → list selalu segar setelah edit.
+- Opsi tengah kalau nanti dianggap perlu: tambahkan GET by id (~10 baris) + fetch saat modal dibuka.
+  Ditunda karena tidak diminta bullet task manapun.
